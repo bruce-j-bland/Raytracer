@@ -22,4 +22,4 @@ Stanford Bunny<br/>
 
 <br/><br/><br/><br/>
 ThunkTS<br/>
-![Alt text](Images/Whitted.png?raw=true "ThunkTS")
+![Alt text](Images/ThunkTS.png?raw=true "ThunkTS")
