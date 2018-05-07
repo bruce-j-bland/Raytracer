@@ -73,6 +73,7 @@ class Triangle : public Object
 {
 public:
 	Point a, b, c;
+	Point ta, tb, tc; //For texture mapping
 	Vector e1, e2, n;
 	Triangle(Point a, Point b, Point c, Material* m) : a(a), b(b), c(c), Object(m) {
 		e1 = Vector(a, b);
@@ -82,6 +83,11 @@ public:
 	Intersection intersect(Ray r, int excludeId = -1);
 	aabb _boundingBox();
 	Object* transform(Vector translation);
+	void setTextureMap(Point texA, Point texB, Point texC) {
+		ta = texA;
+		tb = texB;
+		tc = texC;
+	}
 };
 
 class Cylinder : public Object
@@ -120,6 +126,7 @@ public:
 	GameBoard(Board* b, int n, Material* m) : b(b), n(n), Object(m) { vox.a = Point(0, -.25, 0); vox.b = Point(n, 1, n); }
 	Intersection intersect(Ray r, int excludeId = -1);
 	Intersection subintersect(int i, int j, Ray r);
+	bool* whichIntersect(Ray r); //Returns an array of length n^2 that determines which squares are hit by a ray
 };
 
 BoundingBox* getBoundingBox(Object* o);

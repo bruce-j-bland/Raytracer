@@ -178,6 +178,15 @@ void EntityList::onInput(Direction i) {
 	}
 }
 
+bool EntityList::isHole()
+{
+	for (std::vector<Entity*>::iterator it = list.begin(); it != list.end(); ++it) {
+		if ((*it)->isHole())
+			return true;
+	}
+	return false;
+}
+
 Material* Player1Mat = new PhongMaterial(BLUE);
 Material* Player2Mat = new PhongMaterial(RED);
 
@@ -188,6 +197,7 @@ Player::Player(Board * b) : Entity(b)
 		m = Player2Mat;
 	}
 	model = new Sphere(Point(0, 0.5, 0), 0.4, m);
+	b->addPlayer(this);
 }
 
 //Player Entites
@@ -253,7 +263,7 @@ void Blank::onInput(Direction i) {
 
 //Wall Entities prevent movement into their space and nothing more
 
-Material* WallMat = new PhongMaterial(Color(.5, .5, .5));
+Material* WallMat = new PhongMaterial(Color(.75, .75, .75));
 
 Wall::Wall(Board * b) : Entity(b)
 {

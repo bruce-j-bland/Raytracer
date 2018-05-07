@@ -116,6 +116,7 @@ public:
 	Color operator+(Color c);
 	Color operator*(double d);
 	Color operator*(Color c);
+	double getIlluminance();
 };
 Color operator*(double d, Color c);
 
@@ -146,13 +147,23 @@ typedef struct Intersection {
 	Material* mat; //Material/illumination model of object
 	int id;	//Object id
 	Vector eye; //Vector from point to eye, used by Phong, normalized
+	Point tex; //Point for texture mapping
+	bool inside = false;
 } Intersection;
 
 //Material properties for objects
 class Material
 {
+	double r = 0.0; //Reflectivity
+	double t = 0.0; //Transparency
+	double n = 1.0; //Index of Refraction
 public:
 	Material() { }
+	void setReflectivity(double rv) { r = rv; };
+	void setTransparency(double tv, double nv = 1.0) { t = tv; n = nv; };
+	virtual double getReflectivity(struct Intersection in) { return r; };
+	virtual double getTransparency(struct Intersection in) { return t; };
+	virtual double getIndexOfRefraction(struct Intersection in) { return n; };
 	virtual Color getColor(struct Intersection in, Light** lights, int numLights, Color ambient) { return Color(0, 0, 0); };
 };
 
@@ -191,7 +202,34 @@ public:
 	Color getColor(struct Intersection in, Light** lights, int numLights, Color ambientLight);
 };
 
+//An n by n Checkerboard Pattern of materials a and b
+//Uses texture coordinates
+class Checkerboard : public Material
+{
+	Material *a, *b;
+	int n;
+public:
+	Checkerboard(Material* a, Material* b, int n) : a(a), b(b), n(n) {};
+	double getReflectivity(struct Intersection in);
+	virtual double getTransparency(struct Intersection in);
+	virtual double getIndexOfRefraction(struct Intersection in);
+	Color getColor(struct Intersection in, Light** lights, int numLights, Color ambientLight);
+};
+
 const Intersection NO_INTERSECTION = { -1, Point(), Vector(), new FlatMaterial(BLACK), -1 };
+
+
+class Image; //Forward declaration
+
+//Uses phong as a base
+class ImageTexture : public Material
+{
+	Image* im;
+public:
+	ImageTexture(Image* im) : im(im) {};
+	Color getColor(struct Intersection in, Light** lights, int numLights, Color ambientLight);
+};
+
 
 //Holds a 2d array of pixels
 class Image
@@ -201,16 +239,60 @@ public:
 	Color* pixels;
 	int* ids;
 	double maxIntensity = 0.01;
+	double ldMax = 200;
 	std::mutex mu; //Protect modification to make threadsafe
 	Image(int width, int height) : width(width), height(height) { pixels = new Color[width*height]; ids = new int[width*height]; }
 	~Image() { delete[] pixels; delete[] ids; };
+	void setLDMax(double nits) { ldMax = nits; }
+	void scale(double sf); //Scales all pixels by sf;
+	void naiveScale(); //Call after setting all pixels before rendering them if not doing tone reproduction
+	void wardTone(); //Ward tone reproduction
+	void photoTone(); //Reinhard tone reporduction; Uses log average luminance as key to map to middle grey
+	void photoTone(double key); //Renhard tone reproduction
+	void photoTone(int x, int y); //Reinhard tone reproduction; Uses pixel at x y for key to map to middle grey
+	void histogramAdjustment(bool applyCeiling = true); //Histogram tone reproduction, with and without clamping
+	void deviceScale(); //Scales by 1/ldMax; Call after tone reproduction before rendering
+
 	void setPixel(int x, int y, Color c, int id=0);
 	Color getPixel(int x, int y);
 	int getId(int x, int y);
 	//Returns if pixel represent the edge of an object
 	bool isEdge(int x, int y);
+
+	//Returns log average luminance
+	double getLogAverageLuminance();
 };
 
+//PixelMask is used to only update part of an existing image
+//It stores a number of different masks in the maskSet and selectively chooses between them
+class PixelMask {
+private:
+	bool** maskSet;
+	bool* mask;
+	std::mutex mu; //Protect modification to make threadsafe
+public:
+	int width, height, n;
+
+	PixelMask(int width, int height, int n) : width(width), height(height), n(n) {
+		mask = new bool[width*height];
+		maskSet = new bool*[width*height];
+		for (int i = 0; i < width*height; i++) {
+			mask[i] = false;
+		}
+	}
+	~PixelMask() {
+		for (int i = 0; i < width*height; i++) {
+			delete[] maskSet[i];
+		}
+		delete[] maskSet;
+		delete[] mask;
+	}
+
+	void setPixelMask(int x, int y, bool* m); //Set all masks for a pixel
+	void loadMask(int id); //Activate a mask
+	void resetMasks(); //Deactivate all masks
+	bool getPixelMask(int x, int y); //Return whether the pixel is on in at least one active mask
+};
 
 //Stores info on color and which object was hit
 typedef struct CO {
@@ -329,4 +411,79 @@ inline T clamp(T v, T min, T max) {
 	if (v > max)
 		return max;
 	return v;
+}
+
+
+//Returns true if a ray intersects with an axis aligned box formed from two points
+inline bool doesIntersect(Ray r, Point a, Point b) {
+
+	double tmin, tmax, tymin, tymax, tzmin, tzmax;
+	Vector nmin, nmax, nmin_t, nmax_t;
+
+	double divx = 1 / r.d.x;
+	if (divx >= 0) {
+		tmin = (a.x - r.o.x) * divx;
+		tmax = (b.x - r.o.x) * divx;
+		nmin = Vector(-1, 0, 0);
+		nmax = Vector(1, 0, 0);
+	}
+	else {
+		tmin = (b.x - r.o.x) * divx;
+		tmax = (a.x - r.o.x) * divx;
+		nmin = Vector(1, 0, 0);
+		nmax = Vector(-1, 0, 0);
+	}
+
+	double divy = 1 / r.d.y;
+	if (divy >= 0) {
+		tymin = (a.y - r.o.y) * divy;
+		tymax = (b.y - r.o.y) * divy;
+		nmin_t = Vector(0, -1, 0);
+		nmax_t = Vector(0, 1, 0);
+	}
+	else {
+		tymin = (b.y - r.o.y) * divy;
+		tymax = (a.y - r.o.y) * divy;
+		nmin_t = Vector(0, 1, 0);
+		nmax_t = Vector(0, -1, 0);
+	}
+	if ((tmin > tymax) || (tymin > tmax))
+		return false;
+	if (tymin > tmin) {
+		tmin = tymin;
+		nmin = nmin_t;
+	}
+	if (tymax < tmax) {
+		tmax = tymax;
+		nmax = nmax_t;
+	}
+
+	double divz = 1 / r.d.z;
+	if (divz >= 0) {
+		tzmin = (a.z - r.o.z) * divz;
+		tzmax = (b.z - r.o.z) * divz;
+		nmin_t = Vector(0, 0, -1);
+		nmax_t = Vector(0, 0, 1);
+	}
+	else {
+		tzmin = (b.z - r.o.z) * divz;
+		tzmax = (a.z - r.o.z) * divz;
+		nmin_t = Vector(0, 0, 1);
+		nmax_t = Vector(0, 0, -1);
+	}
+	if ((tmin > tzmax) || (tzmin > tmax))
+		return false;
+	if (tzmin > tmin) {
+		tmin = tzmin;
+		nmin = nmin_t;
+	}
+	if (tzmax < tmax) {
+		tmax = tzmax;
+		nmax = nmax_t;
+	}
+
+	if (tmax <= 0)	//Entire box is behind origin
+		return false;
+
+	return true;
 }

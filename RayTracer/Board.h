@@ -25,6 +25,7 @@ enum Direction { up, down, left, right, upT, downT, leftT, rightT, reverse, cloc
 enum Phase { end, place, move, destroy, placePanel, chaos, next };
 
 class Entity;
+class Player;
 
 //Helper class
 //Keeps track of which action to do next
@@ -73,6 +74,9 @@ private:
 	//Also allows mutliple entites to 'simultaneously' act by breaking up move actions
 	QueueStack qs;
 
+	Player** players = new Player*[10];
+	int playerCount = 0;
+
 public:
 	Board() : turn(-1), current(-1) {};
 	~Board(); //Destructure manages memory
@@ -83,6 +87,8 @@ public:
 	Entity* pull(Entity* e, int x, int y); //Grabs the entity from its location on the map
 	void place(Entity* e, int x, int y, Direction d = none); //Puts an entity into a given location with the given direction
 	void move(Entity* e, int x1, int y1, int x2, int y2, Direction d = none); //Moves an entity from pos1 to pos2, stores direction
+	void addPlayer(Player* p);
+	Player* getCurrentPlayer();
 
 	void start(); //Starts the game
 	void requestMove(Entity* e, Direction d); //Asks the board to move Entity e in direcion d when possible

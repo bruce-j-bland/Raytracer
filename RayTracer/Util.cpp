@@ -123,6 +123,159 @@ std::ostream & operator<<(std::ostream & os, Vector const & v)
 	return os << "<" << v.x << ", " << v.y << ", " << v.z << ">";
 }
 
+void Image::scale(double sf)
+{
+	mu.lock();
+	for (int i = 0; i < width*height; i++)
+		pixels[i] = pixels[i] * sf;
+	mu.unlock();
+}
+
+void Image::naiveScale()
+{
+	scale(1 / maxIntensity);
+	maxIntensity = 1;
+}
+
+void Image::wardTone()
+{
+	double sf = pow(ldMax / 2, 0.4);
+	sf += 1.219;
+	sf /= (1.219 + pow(getLogAverageLuminance(), 0.4));
+	sf = pow(sf, 2.5);
+	scale(sf);
+}
+
+void Image::photoTone()
+{
+	photoTone(getLogAverageLuminance());
+}
+
+void Image::photoTone(double key)
+{
+	mu.lock();
+	double sf = 0.18 / key;
+	for (int i = 0; i < width*height; i++){
+		pixels[i] = pixels[i] * sf; //Map the key to middle luminance
+		pixels[i] = Color(pixels[i].r / (1 + pixels[i].r), pixels[i].g / (1 + pixels[i].g), pixels[i].b / (1 + pixels[i].b)); //Reflectence
+		pixels[i] = pixels[i] * ldMax; //Illuminate the film with bright white light
+	}
+	mu.unlock();
+}
+
+void Image::photoTone(int x, int y)
+{
+	photoTone(getPixel(x, y).getIlluminance());
+}
+
+void Image::deviceScale()
+{
+	scale(1 / ldMax);
+}
+
+void Image::histogramAdjustment(bool applyCeiling)
+{
+	mu.lock();
+	//int s = (int)floor(2 * tan(0.5) / 0.01745); //Pixel length for one degree solid angle
+	int s = 62;
+
+	double* hist = new double[100];
+	double* histZone = new double[100];
+
+	double logMax = -1000;
+	double logMin = 1000;
+	for (int i = 0; i < width*height; i++) {
+		double logL = log(EPSILON + pixels[i].getIlluminance());
+		logMax = maximum(logMax, logL);
+		logMin = minimum(logMin, logL);
+	}
+
+	for (int i = 0; i < 100; i++) {
+		hist[i] = 0;
+		histZone[i] = (logMax - logMin) * ((i + 1) / 100.0) + logMin;
+	}
+	int T = 0; //Number of samples
+
+	//Get histogram samples of average log illuminance
+	for (int i = s / 2; i < width - (s / 2); i += (s / 16)) {
+		for (int j = s / 2; j < height - (s / 2); j += (s / 16)) {
+			T += 1;
+
+			double average = 0.0;
+			int U = 0;
+			for (int x = 0; x <= s; x++) {
+				for (int y = 0; y <= s; y++) {
+					U += 1;
+					average += log(EPSILON + getPixel(i - (s / 2) + x, j - (s / 2) + y).getIlluminance());
+				}
+			}
+			average /= U;
+
+			int q = 0;
+			while (average >= histZone[q]) {
+				q++;
+				if (q == 99)
+					break;
+			}
+			hist[q]++;
+		}
+	}
+
+	//Histogram Ceiling
+	if (applyCeiling){
+		double linScale = ((logMax - logMin) / 100.0) / (log(ldMax) + 4);
+		while (true) {
+			double ceiling = T * linScale;
+
+			//No more than 2.5% of samples may exceed ceiling
+
+			int overcount = 0;
+			for (int i = 0; i < 100; i++) {
+				if (hist[i] > ceiling)
+					overcount += (hist[i] - ceiling);
+			}
+
+			if (overcount <= T * 0.025) //Passes the test
+				break;
+
+			for (int i = 0; i < 100; i++) {
+				if (hist[i] > ceiling) { //Clamp and restart, since T changes
+					int dif = hist[i] - ceiling;
+					hist[i] = ceiling;
+					T -= dif;
+					continue;
+				}
+			}
+		}
+	}
+
+	//Get cumulative distribution
+	for (int i = 1; i < 100; i++) {
+		hist[i] += hist[i - 1];
+	}
+	for (int i = 1; i < 100; i++) {
+		hist[i] /= T;
+	}
+
+	double scale = log(ldMax) + 4; //Log minimum luminance is -4
+
+	for (int i = 0; i < width*height; i++) {
+		double logLW = log(EPSILON + pixels[i].getIlluminance());
+		int q = 0;
+		while (logLW >= histZone[q]) {
+			q++;
+			if (q == 99)
+				break;
+		}
+
+		double logLD = scale * hist[q] - 4;
+		pixels[i] = pixels[i] * (exp(logLD));
+	}
+	delete[] hist;
+	delete[] histZone;
+	mu.unlock();
+}
+
 void Image::setPixel(int x, int y, Color c, int id)
 {
 	mu.lock();
@@ -135,7 +288,7 @@ void Image::setPixel(int x, int y, Color c, int id)
 
 Color Image::getPixel(int x, int y)
 {
-	return pixels[x + y * width] * (1/maxIntensity);
+	return pixels[x + y * width];
 }
 
 int Image::getId(int x, int y)
@@ -171,6 +324,16 @@ bool Image::isEdge(int x, int y)
 	}
 
 	return false;
+}
+
+double Image::getLogAverageLuminance()
+{
+	double l = 0;
+	for (int i = 0; i < width*height; i++)
+		l += log(EPSILON + pixels[i].getIlluminance());
+	l /= (width*height);
+	l = exp(l);
+	return l;
 }
 
 Point Ray::pointAt(double dist)
@@ -216,6 +379,11 @@ Color Color::operator*(double d)
 Color Color::operator*(Color c)
 {
 	return Color(r * c.r, g * c.g, b * c.b);
+}
+
+double Color::getIlluminance()
+{
+	return 0.27*r + 0.67*g + 0.06*b;
 }
 
 Color PhongMaterial::getColor(Intersection in, Light ** lights, int numLights, Color ambientLight)
@@ -264,4 +432,134 @@ Color BlinnMaterial::getColor(Intersection in, Light ** lights, int numLights, C
 	}
 
 	return (ka * amb) + (kd * dif) + (ks * spec);
+}
+
+double Checkerboard::getReflectivity(Intersection in)
+{
+	double u = in.tex.x;
+	double v = in.tex.y;
+
+	u *= n;
+	v *= n;
+
+	int i = (int)(floor(u));
+	int j = (int)(floor(v));
+
+	if ((i + j) % 2) {
+		return b->getReflectivity(in);
+	}
+	else {
+		return a->getReflectivity(in);
+	}
+}
+
+double Checkerboard::getTransparency(Intersection in)
+{
+	double u = in.tex.x;
+	double v = in.tex.y;
+
+	u *= n;
+	v *= n;
+
+	int i = (int)(floor(u));
+	int j = (int)(floor(v));
+
+	if ((i + j) % 2) {
+		return b->getTransparency(in);
+	}
+	else {
+		return a->getTransparency(in);
+	}
+}
+
+double Checkerboard::getIndexOfRefraction(Intersection in)
+{
+	double u = in.tex.x;
+	double v = in.tex.y;
+
+	u *= n;
+	v *= n;
+
+	int i = (int)(floor(u));
+	int j = (int)(floor(v));
+
+	if ((i + j) % 2) {
+		return b->getIndexOfRefraction(in);
+	}
+	else {
+		return a->getIndexOfRefraction(in);
+	}
+}
+
+Color Checkerboard::getColor(Intersection in, Light ** lights, int numLights, Color ambientLight)
+{
+	double u = in.tex.x;
+	double v = in.tex.y;
+
+	u *= n;
+	v *= n;
+
+	int i = (int)(floor(u));
+	int j = (int)(floor(v));
+
+	if ((i + j) % 2) {
+		return b->getColor(in, lights, numLights, ambientLight);
+	}
+	else {
+		return a->getColor(in, lights, numLights, ambientLight);
+	}
+}
+
+Color ImageTexture::getColor(Intersection in, Light ** lights, int numLights, Color ambientLight)
+{
+	double u = in.tex.x;
+	double v = in.tex.y;
+
+	u *= 1-im->width;
+	v *= im->height;
+
+	int i = im->width - (int)(floor(u)) - 1;
+	int j = im->height - (int)(floor(v)) - 1;
+
+	Color c = im->getPixel(i, j);
+
+	PhongMaterial* m = new PhongMaterial(c);
+	c = m->getColor(in, lights, numLights, ambientLight);
+	delete m;
+
+	return c;
+}
+
+void PixelMask::setPixelMask(int x, int y, bool * m)
+{
+	mu.lock();
+	maskSet[x + y * width] = m;
+	mu.unlock();
+}
+
+void PixelMask::loadMask(int id)
+{
+	if (id<0 || id > n)
+		return;
+	mu.lock();
+	for (int i = 0; i < width*height; i++) {
+		if (maskSet[i][id]) {
+			mask[i] = true;
+		}
+	}
+	mu.unlock();
+}
+
+void PixelMask::resetMasks()
+{
+	mu.lock();
+	for (int i = 0; i < width*height; i++) {
+		mask[i] = false;
+	}
+	mu.unlock();
+}
+
+bool PixelMask::getPixelMask(int x, int y)
+{
+	return mask[x + y * width];
 }

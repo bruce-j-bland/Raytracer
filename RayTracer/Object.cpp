@@ -56,7 +56,14 @@ Intersection Sphere::intersect(Ray r, int excludeId)
 	i2.p = r.pointAt(d2);
 	i2.n = Vector(p, i2.p).normalize();
 
-	return leastPos(i1, i2);
+	Intersection i = leastPos(i1, i2);
+
+	if (p.distance(r.o) < (rad+EPSILON)) {
+		i.n = -1 * i.n;
+		i.inside = true;
+	}
+
+	return i;
 }
 
 aabb Sphere::_boundingBox()
@@ -104,6 +111,12 @@ Intersection Triangle::intersect(Ray r, int excludeId)
 	if (r.d*n > 0) {
 		i.n = -1 * n;
 	}
+
+	double w = 1 - (u + v);
+
+	i.tex.x = ta.x*w + tb.x*u + tc.x*v;
+	i.tex.y = ta.y*w + tb.y*u + tc.y*v;
+	i.tex.z = ta.z*w + tb.z*u + tc.z*v;
 
 	return i;
 }
@@ -166,7 +179,6 @@ Intersection Cylinder::intersect(Ray r, int excludeId)
 	i2.p = r.pointAt(d2);
 	i2.n = (tmp - ((tmp*v)*v)).normalize();
 
-
 	if (v*Vector(a, q1) <= 0 || v*Vector(b, q1) >= 0) { //Point is above or below cylinder
 		i1 = NO_INTERSECTION;
 	}
@@ -199,7 +211,14 @@ Intersection Cylinder::intersect(Ray r, int excludeId)
 		i4 = NO_INTERSECTION;
 	}
 
-	return leastPos(leastPos(i1, i2), leastPos(i3, i4));
+	Intersection i = leastPos(leastPos(i1, i2), leastPos(i3, i4));
+
+	if (isPos(i) && i.n*r.d < 0) {
+		i.n = -1 * i.n;
+		i.inside = true;
+	}
+
+	return i;
 }
 
 //Naive interpretation, assumes sphere capped cylinder
@@ -649,4 +668,127 @@ Intersection GameBoard::subintersect(int i, int j, Ray r)
 	in.id = i * n + j;
 
 	return in;
+}
+
+bool * GameBoard::whichIntersect(Ray r)
+{
+	bool* inters = new bool[n*n+1];
+	for (int i = 0; i < n*n+1; i++) {
+		inters[i] = false;
+	}
+
+	Point a = Point(n/2, -2.5, n/2);
+	Point b = Point((n/2)+1, 1, (n/2)+1);
+	if (doesIntersect(r, a, b))
+		inters[n*n] = true;
+
+	Point enter, leave;
+
+	double tmin, tmax, tymin, tymax, tzmin, tzmax;
+
+	double divx = 1 / r.d.x;
+	if (divx >= 0) {
+		tmin = (vox.a.x - r.o.x) * divx;
+		tmax = (vox.b.x - r.o.x) * divx;
+	}
+	else {
+		tmin = (vox.b.x - r.o.x) * divx;
+		tmax = (vox.a.x - r.o.x) * divx;
+	}
+
+	double divy = 1 / r.d.y;
+	if (divy >= 0) {
+		tymin = (vox.a.y - r.o.y) * divy;
+		tymax = (vox.b.y - r.o.y) * divy;
+	}
+	else {
+		tymin = (vox.b.y - r.o.y) * divy;
+		tymax = (vox.a.y - r.o.y) * divy;
+	}
+	if ((tmin > tymax) || (tymin > tmax))
+		return inters; //No intersections
+	if (tymin > tmin)
+		tmin = tymin;
+	if (tymax < tmax)
+		tmax = tymax;
+
+	double divz = 1 / r.d.z;
+	if (divz >= 0) {
+		tzmin = (vox.a.z - r.o.z) * divz;
+		tzmax = (vox.b.z - r.o.z) * divz;
+	}
+	else {
+		tzmin = (vox.b.z - r.o.z) * divz;
+		tzmax = (vox.a.z - r.o.z) * divz;
+	}
+	if ((tmin > tzmax) || (tzmin > tmax))
+		return inters; //No intersection
+	if (tzmin > tmin)
+		tmin = tzmin;
+	if (tzmax < tmax)
+		tmax = tzmax;
+
+	if (tmax <= 0)	//Entire box is behind origin
+		return inters;
+
+	if (tmin <= 0) //Point starts inside box
+		tmin = 0;
+
+	enter = r.pointAt(tmin);
+	leave = r.pointAt(tmax);
+
+	if (floor(enter.x + 2 * EPSILON) != floor(enter.x)) { //Floating point error
+		enter.x += 2 * EPSILON;
+	}
+	if (floor(enter.z + 2 * EPSILON) != floor(enter.z)) { //Floating point error
+		enter.z += 2 * EPSILON;
+	}
+
+	int enter_i, enter_j, leave_i, leave_j; //The boardgame coordinates of the entering and leaving squares
+
+	enter_i = clamp((int)(floor(enter.x)), 0, n - 1);
+	enter_j = clamp((int)(floor(enter.z)), 0, n - 1);
+
+	leave_i = clamp((int)(floor(leave.x)), 0, n - 1);
+	leave_j = clamp((int)(floor(leave.z)), 0, n - 1);
+
+	Intersection in = NO_INTERSECTION;
+
+	if (enter_i == leave_i) { //Light ray follows a row
+		if (enter_j < leave_j) {
+			for (int j = enter_j; j <= leave_j; j++) {
+				inters[enter_i*n + j] = true;
+			}
+		}
+		else {
+			for (int j = enter_j; j >= leave_j; j--) {
+				inters[enter_i*n + j] = true;
+			}
+		}
+	}
+	else if (enter_j == leave_j) { //Light ray follows a column
+		if (enter_i < leave_i) {
+			for (int i = enter_i; i <= leave_i; i++) {
+				inters[i*n + enter_j] = true;
+			}
+		}
+		else {
+			for (int i = enter_i; i >= leave_i; i--) {
+				inters[i*n + enter_j] = true;
+			}
+		}
+	}
+	else { //Light ray follows a diagonal
+
+		for (int i = minimum(enter_i, leave_i); i <= maximum(enter_i, leave_i); i++) {
+			for (int j = minimum(enter_j, leave_j); j <= maximum(enter_j, leave_j); j++) {
+				a = Point(i, -0.25, j);
+				b = Point(i + 1, 1, j + 1);
+				if (doesIntersect(r, a, b))
+					inters[i*n + j] = true;
+			}
+		}
+	}
+
+	return inters;
 }

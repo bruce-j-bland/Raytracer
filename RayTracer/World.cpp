@@ -2,7 +2,7 @@
 #include "World.h"
 
 
-CO World::spawn(Ray r, double focal)
+CO World::spawn(Ray r, double focal, int depth)
 {
 	Intersection q;
 	q.id = -1;
@@ -23,7 +23,7 @@ CO World::spawn(Ray r, double focal)
 			Ray lightRay = Ray(q.p, lights[j]->p);
 			bool reaches = true;
 			for (int i = 0; i < n; i++) {
-				Intersection e = objects[i]->intersect(lightRay);
+				Intersection e = objects[i]->intersect(lightRay, q.id);
 				if (isPos(e)) { //Intersection of another object blocks light
 					reaches = false;
 					break;
@@ -39,6 +39,46 @@ CO World::spawn(Ray r, double focal)
 
 	CO ret = {q.mat->getColor(q, reachable, numReachable, ambient), q.id};
 	delete[] reachable;
+
+	if (depth < MAX_DEPTH) {
+		double reflectivity = q.mat->getReflectivity(q);
+		double transparency = q.mat->getTransparency(q);
+		double opacity = 1 - (reflectivity + transparency);
+		ret.c = opacity * ret.c;
+		if (reflectivity > 0) {
+			Vector reflection = reflect(r.d, q.n).normalize();
+			Ray reflectedRay = Ray(q.p+(EPSILON*2*reflection), reflection);
+			Color reflectedResult = spawn(reflectedRay, EPSILON, depth + 1).c;
+			ret.c = ret.c + ((reflectivity)*reflectedResult);
+		}
+		if (transparency > 0) {
+			double index = q.mat->getIndexOfRefraction(q);
+			Vector tran;
+			if (index == 1.0) {
+				tran = r.d; //No refraction from material
+			}
+			else {
+				double ni = 1.0;
+				double nt = index;
+				if (q.inside) {
+					ni = index;
+					nt = 1.0;
+				}
+				double dot = r.d*q.n;
+				Vector cross = q.n.cross(r.d);
+				double refractionValue = 1-(((ni*ni)/(nt*nt))*(cross*cross));
+				if (refractionValue < 0) { //total internal reflection
+					tran = reflect(r.d, q.n).normalize();
+				}
+				else {
+					tran = (ni / nt)*(q.n.cross(-1*cross)) - sqrt(refractionValue)*q.n;
+				}
+			}
+			Ray transparencyRay = Ray(q.p + (EPSILON * 2 * tran), tran);
+			Color transparencyResult = spawn(transparencyRay, EPSILON, depth + 1).c;
+			ret.c = ret.c + ((transparency)*transparencyResult);
+		}
+	}
 
 	return ret;
 }
@@ -69,7 +109,7 @@ Camera::Camera(Point eyepoint, Point lookat, Vector up) : eyepoint(eyepoint), lo
 }
 //n is towards camera, away from scene
 //Focal is towards scene, away from camera
-void Camera::render(World w, double focal, double width, double height, Image* im, int samples)
+void Camera::render(World w, double focal, double width, double height, Image* im, int samples, PixelMask* pm)
 {
 	double p_width = width / im->width;
 	double p_height = height / im->height;
@@ -100,9 +140,11 @@ void Camera::render(World w, double focal, double width, double height, Image* i
 
 	for (int x = 0; x < im->width; x++) {
 		for (int y = 0; y < im->height; y++) {
-			Point d = corner + (x*du) + (y*dv);
-			Ray r = Ray(eyepoint, d);
-			n.pushTask(r, x, y);
+			if (!pm || pm->getPixelMask(x, y)){
+				Point d = corner + (x*du) + (y*dv);
+				Ray r = Ray(eyepoint, d);
+				n.pushTask(r, x, y);
+			}
 		}
 	}
 
@@ -114,7 +156,7 @@ void Camera::render(World w, double focal, double width, double height, Image* i
 		srand((unsigned)time(NULL));
 		for (int x = 0; x < im->width; x++) {
 			for (int y = 0; y < im->height; y++) { //If EDGE_ONLY_SUPER is true, only super sample edges of objects
-				if (!EDGE_ONLY_SUPER || im->isEdge(x, y)) { 
+				if ((!EDGE_ONLY_SUPER || im->isEdge(x, y)) && (!pm || pm->getPixelMask(x,y))) { 
 					Point d = corner + (x*du) + (y*dv);
 					Ray r = Ray(eyepoint, d);
 					n.pushTask(r, x, y);
@@ -123,6 +165,43 @@ void Camera::render(World w, double focal, double width, double height, Image* i
 		}
 		n.superSampleRun(samples);
 	}
+}
+
+void Camera::render(World w, double focal, double width, double height, Image* im, PixelMask* pm) {
+	render(w, focal, width, height, im, 1, pm);
+}
+
+
+void Camera::renderPixelMask(GameBoard* gb, double focal, double width, double height, PixelMask * pm)
+{
+	double p_width = width / pm->width;
+	double p_height = height / pm->height;
+
+	Point corner = Point(-width / 2 + p_width / 2, height / 2 - p_height / 2, -focal);
+	Vector du = Vector(p_width, 0, 0);
+	Vector dv = Vector(0, -p_height, 0);
+
+	Point dHor = corner + du;
+	Point dVer = corner + dv;
+
+	corner = transform * corner;
+	dHor = transform * dHor;
+	dVer = transform * dVer;
+
+	du = Vector(corner, dHor);
+	dv = Vector(corner, dVer);
+
+	Needle n(gb, pm);
+
+	for (int x = 0; x < pm->width; x++) {
+		for (int y = 0; y < pm->height; y++) {
+			Point d = corner + (x*du) + (y*dv);
+			Ray r = Ray(eyepoint, d);
+			n.pushTask(r, x, y);
+		}
+	}
+
+	n.pixelMaskRun();
 }
 
 
@@ -149,6 +228,16 @@ void Needle::superSampleRun(int samples)
 {
 	for (int i = 0; i < numThreads; i++) {
 		threads[i] = std::thread(executeSuperSample, this, samples);
+	}
+	for (int i = 0; i < numThreads; i++) {
+		threads[i].join();
+	}
+}
+
+void Needle::pixelMaskRun()
+{
+	for (int i = 0; i < numThreads; i++) {
+		threads[i] = std::thread(executeMaskTask, this);
 	}
 	for (int i = 0; i < numThreads; i++) {
 		threads[i].join();
@@ -203,4 +292,15 @@ void executeSuperSample(Needle * n, int samples)
 	
 
 	delete[] color;
+}
+
+void executeMaskTask(Needle * n)
+{
+	Task* t = n->getTask();
+	while (t) {
+		bool* m = n->gb->whichIntersect(t->r);
+		n->pm->setPixelMask(t->x, t->y, m);
+		delete t;
+		t = n->getTask();
+	}
 }

@@ -388,8 +388,18 @@ void Board::move(Entity *e, int x1, int y1, int x2, int y2, Direction d) {
 	Entity* w = getEntity(x2, y2);
 	if (w == nullptr || !w->isSolid(e)) {
 		place(e, x2, y2, d);
-		std::cout << x2 << " " << y2 << "\n";
+		//std::cout << x2 << " " << y2 << "\n";
 	}
+}
+
+void Board::addPlayer(Player * p)
+{
+	players[playerCount++] = p;
+}
+
+Player* Board::getCurrentPlayer()
+{
+	return players[turn%playerCount];
 }
 
 
@@ -447,7 +457,7 @@ Phase Board::next() {
 			}
 		}
 	}
-	std::cout << current << turn;
+	//std::cout << current << turn;
 	return order[current];
 }
 
@@ -559,8 +569,8 @@ bool Board::act() {
 
 			if (confirm.first != p.first) { //The entity has been removed from the stack through stop or dead
 				return qs.isEmpty();
-				std::cout << confirm.first->getID() << "\n";
-				std::cout << p.first->getID() << "\n";
+				//std::cout << confirm.first->getID() << "\n";
+				//std::cout << p.first->getID() << "\n";
 			}
 
 			p = qs.pop(); //Direction might have changed, and it needs to be removed from the stack

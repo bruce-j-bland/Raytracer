@@ -9,6 +9,7 @@
 #pragma once
 
 #define MAX_DIST 1000
+#define MAX_DEPTH 8
 
 #define EDGE_ONLY_SUPER true //Optimization technique to restrict super sampling to the edges of objects
 
@@ -29,7 +30,7 @@ public:
 		mat = new FlatMaterial(background); 
 	}
 	//Return the color traced by a ray
-	CO spawn(Ray r, double focal);
+	CO spawn(Ray r, double focal, int depth = 0);
 };
 
 //The entity generating images
@@ -45,7 +46,9 @@ public:
 	Matrix transform = Matrix(4);
 	//Normalizes the vectors before assigning them
 	Camera(Point eyepoint, Point lookat, Vector up);
-	void render(World w, double focal, double width, double height, Image* i, int samples=1);
+	void render(World w, double focal, double width, double height, Image* i, int samples=1, PixelMask* pm = nullptr);
+	void render(World w, double focal, double width, double height, Image* i, PixelMask* pm);
+	void renderPixelMask(GameBoard* gb, double focal, double width, double height, PixelMask* pm);
 };
 
 typedef struct Task {
@@ -71,6 +74,8 @@ public:
 	int numThreads;
 	World* w;
 	Image* im;
+	PixelMask* pm; //Used for ThunkTS PixelMap optimization
+	GameBoard* gb; //Used for ThunkTS PixelMap optimization
 	double d;
 	Vector du, dv; //Only used by super sampler
 
@@ -78,6 +83,10 @@ public:
 		threads = new std::thread[numThreads];
 	}
 	Needle(World* w, Image* im, double d, Vector du, Vector dv, int numThreads = 100) : w(w), im(im), d(d), du(du), dv(dv), numThreads(numThreads) {
+		threads = new std::thread[numThreads];
+	}
+	//Constructor for calculating pixel mask
+	Needle(GameBoard* gb, PixelMask* pm, int numThreads = 100) : gb(gb), pm(pm), numThreads(numThreads) {
 		threads = new std::thread[numThreads];
 	}
 	~Needle(){
@@ -88,10 +97,13 @@ public:
 	Task* getTask();
 	//Renders pixels to image
 	void run();
-	//Generates 
+	//Generates image with supersampling
 	void superSampleRun(int samples);
+	//Calculates pixelmask
+	void pixelMaskRun();
 };
 
 //Called in threads
 void executeTask(Needle* n);
 void executeSuperSample(Needle* n, int samples);
+void executeMaskTask(Needle* n);

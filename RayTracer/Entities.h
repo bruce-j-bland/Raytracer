@@ -43,7 +43,7 @@ public:
 	virtual void onInput(Direction i) = 0; //Functions called when an input is given
 	virtual bool isContainer() { return false; }; //True only for EntityLists
 	virtual bool isPlayer() { return false; }; //True only for Players
-	virtual bool isHole() { return false; }; //True only for Holes
+	virtual bool isHole() { return false; }; //True only for Holes and lists containing holes
 };
 
 //Serves to allow multiple entities in the same location
@@ -67,6 +67,7 @@ public:
 	virtual void triggered(Entity* e); //Calls this function on all Entities within
 	virtual void onInput(Direction i); //Calls this function on all Entities within
 	virtual bool isContainer() { return true; }; //True only for EntityLists
+	virtual bool isHole(); //True if hole is in list
 };
 
 //Classic Entities (Those that exist on the default board)
